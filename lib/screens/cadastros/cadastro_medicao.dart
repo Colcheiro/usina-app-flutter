@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
+
 import '../../models/equipamento.dart';
 import '../../models/medicao.dart';
 import '../../models/safra.dart';
 import '../../models/tipoinformacao.dart';
-import '../../models/unidade.dart';
-import '../../models/unidade_medida.dart';
+import '../../services/api_config.dart';
+import '../../services/crud_service.dart';
 
 class CadastroMedicao extends StatefulWidget {
   const CadastroMedicao({super.key});
@@ -16,24 +17,46 @@ class CadastroMedicao extends StatefulWidget {
 class _CadastroMedicaoState extends State<CadastroMedicao> {
   final _formKey = GlobalKey<FormState>();
   final _valorController = TextEditingController();
-  final _safras = [
-    Safra(id: 1, nomeSafra: 'Safra 2025', dataInicio: DateTime(2025, 1, 1), dataFim: DateTime(2025, 12, 31)),
-    Safra(id: 2, nomeSafra: 'Safra 2026', dataInicio: DateTime(2026, 1, 1), dataFim: DateTime(2026, 12, 31)),
-  ];
-  final _equipamentos = [
-    Equipamento(id: 1, nome: 'Caldeira', unidade: Unidade(id: 1, nome: 'Unidade 1')),
-    Equipamento(id: 2, nome: 'Turbina', unidade: Unidade(id: 2, nome: 'Unidade 2')),
-  ];
-  final _tipos = [
-    TipoInformacao(id: 1, nome: 'Temperatura', unidadeMedida: UnidadeMedida(id: 1, nome: 'Celsius', simbolo: '°C')),
-    TipoInformacao(id: 2, nome: 'Pressão', unidadeMedida: UnidadeMedida(id: 2, nome: 'Pressão', simbolo: 'bar')),
-    TipoInformacao(id: 3, nome: 'Rotação', unidadeMedida: UnidadeMedida(id: 3, nome: 'Rotação', simbolo: 'RPM')),
-  ];
+  final _medicaoService = CrudService<Medicao>(
+    endpoint: ApiConfig.medicaoEndpoint,
+    fromJson: Medicao.fromJson,
+    toJson: (value, {bool incluirId = false}) => value.toJson(incluirId: incluirId),
+  );
+  final _safraService = CrudService<Safra>(
+    endpoint: ApiConfig.safraEndpoint,
+    fromJson: Safra.fromJson,
+    toJson: (value, {bool incluirId = false}) => value.toJson(incluirId: incluirId),
+  );
+  final _equipamentoService = CrudService<Equipamento>(
+    endpoint: ApiConfig.equipamentoEndpoint,
+    fromJson: Equipamento.fromJson,
+    toJson: (value, {bool incluirId = false}) => value.toJson(incluirId: incluirId),
+  );
+  final _tipoService = CrudService<TipoInformacao>(
+    endpoint: ApiConfig.tipoInformacaoEndpoint,
+    fromJson: TipoInformacao.fromJson,
+    toJson: (value, {bool incluirId = false}) => value.toJson(incluirId: incluirId),
+  );
+
+  final List<Safra> _safras = [];
+  final List<Equipamento> _equipamentos = [];
+  final List<TipoInformacao> _tipos = [];
+  final List<Medicao> _medicoes = [];
+
   Safra? _safraSelecionada;
   Equipamento? _equipamentoSelecionado;
   TipoInformacao? _tipoSelecionado;
   DateTime? _dataSelecionada;
-  final List<Medicao> _medicoes = [];
+  bool _carregando = false;
+  bool _editando = false;
+  int? _medicaoIdEmEdicao;
+  String? _erro;
+
+  @override
+  void initState() {
+    super.initState();
+    _carregarDados();
+  }
 
   @override
   void dispose() {
@@ -41,11 +64,62 @@ class _CadastroMedicaoState extends State<CadastroMedicao> {
     super.dispose();
   }
 
+  Future<void> _carregarDados() async {
+    if (!mounted) return;
+    setState(() => _carregando = true);
+    try {
+      final safras = await _safraService.listar();
+      final equipamentos = await _equipamentoService.listar();
+      final tipos = await _tipoService.listar();
+      final medicoes = await _medicaoService.listar();
+      if (!mounted) return;
+      setState(() {
+        _safras
+          ..clear()
+          ..addAll(safras);
+        _equipamentos
+          ..clear()
+          ..addAll(equipamentos);
+        _tipos
+          ..clear()
+          ..addAll(tipos);
+        _medicoes
+          ..clear()
+          ..addAll(medicoes);
+        _erro = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _erro = error.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      if (mounted) {
+        setState(() => _carregando = false);
+      }
+    }
+  }
+
   Future<void> _selecionarData() async {
-    final data = await showDatePicker(context: context, initialDate: DateTime.now(), firstDate: DateTime(2000), lastDate: DateTime(2100));
+    final data = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2000),
+      lastDate: DateTime(2100),
+    );
     if (data == null || !mounted) return;
-    final hora = await showTimePicker(context: context, initialTime: TimeOfDay.now());
-    if (hora != null) setState(() => _dataSelecionada = DateTime(data.year, data.month, data.day, hora.hour, hora.minute));
+
+    final hora = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (hora == null) return;
+
+    setState(() => _dataSelecionada = DateTime(
+          data.year,
+          data.month,
+          data.day,
+          hora.hour,
+          hora.minute,
+        ));
   }
 
   String _formatarData(DateTime? data) {
@@ -53,48 +127,240 @@ class _CadastroMedicaoState extends State<CadastroMedicao> {
     return '${data.day.toString().padLeft(2, '0')}/${data.month.toString().padLeft(2, '0')}/${data.year} ${data.hour.toString().padLeft(2, '0')}:${data.minute.toString().padLeft(2, '0')}';
   }
 
-  void _salvar() {
-    if (!_formKey.currentState!.validate() || _dataSelecionada == null) return;
-    setState(() {
-      _medicoes.add(Medicao(id: _medicoes.length + 1, safra: _safraSelecionada!, equipamento: _equipamentoSelecionado!, tipoInformacao: _tipoSelecionado!, valor: double.parse(_valorController.text.replaceAll(',', '.')), data: _dataSelecionada!));
-      _valorController.clear();
-      _safraSelecionada = null;
-      _equipamentoSelecionado = null;
-      _tipoSelecionado = null;
-      _dataSelecionada = null;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Medição cadastrada com sucesso!')));
+  Future<void> _salvar() async {
+    if (!_formKey.currentState!.validate() ||
+        _safraSelecionada == null ||
+        _equipamentoSelecionado == null ||
+        _tipoSelecionado == null ||
+        _dataSelecionada == null) {
+      return;
+    }
+
+    final valor = double.tryParse(_valorController.text.replaceAll(',', '.'));
+    if (valor == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Informe um valor numérico válido.')),
+      );
+      return;
+    }
+
+    final medicao = Medicao(
+      id: _medicaoIdEmEdicao ?? 0,
+      safra: _safraSelecionada!,
+      equipamento: _equipamentoSelecionado!,
+      tipoInformacao: _tipoSelecionado!,
+      valor: valor,
+      data: _dataSelecionada!,
+    );
+
+    try {
+      if (_editando && _medicaoIdEmEdicao != null) {
+        final atualizada = await _medicaoService.atualizar(_medicaoIdEmEdicao!, medicao);
+        if (!mounted) return;
+        setState(() {
+          final index = _medicoes.indexWhere((item) => item.id == _medicaoIdEmEdicao);
+          if (index >= 0) _medicoes[index] = atualizada;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Medição atualizada com sucesso!')),
+        );
+      } else {
+        final criada = await _medicaoService.criar(medicao);
+        if (!mounted) return;
+        setState(() => _medicoes.add(criada));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Medição cadastrada com sucesso!')),
+        );
+      }
+      _limparFormulario();
+      await _carregarDados();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
   }
 
-  Future<void> _excluir(int indice) async {
-    final confirmar = await showDialog<bool>(context: context, builder: (context) => AlertDialog(
-      title: const Text('Excluir registro'),
-      content: const Text('Deseja realmente excluir este registro?'),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-        TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Excluir')),
-      ],
-    ));
-    if (confirmar == true) setState(() => _medicoes.removeAt(indice));
+  Future<void> _excluir(Medicao medicao) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excluir registro'),
+        content: const Text('Deseja realmente excluir esta medição?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Excluir')),
+        ],
+      ),
+    );
+    if (confirmar != true) return;
+
+    try {
+      await _medicaoService.excluir(medicao.id);
+      if (!mounted) return;
+      setState(() => _medicoes.removeWhere((item) => item.id == medicao.id));
+      if (_medicaoIdEmEdicao == medicao.id) _limparFormulario();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Medição excluída com sucesso!')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString().replaceFirst('Exception: ', ''))),
+      );
+    }
+  }
+
+  void _editar(Medicao medicao) {
+    setState(() {
+      _editando = true;
+      _medicaoIdEmEdicao = medicao.id;
+      _safraSelecionada = medicao.safra;
+      _equipamentoSelecionado = medicao.equipamento;
+      _tipoSelecionado = medicao.tipoInformacao;
+      _valorController.text = medicao.valor.toString();
+      _dataSelecionada = medicao.data;
+    });
+  }
+
+  void _limparFormulario() {
+    _valorController.clear();
+    _safraSelecionada = null;
+    _equipamentoSelecionado = null;
+    _tipoSelecionado = null;
+    _dataSelecionada = null;
+    _editando = false;
+    _medicaoIdEmEdicao = null;
+    _formKey.currentState?.reset();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(appBar: AppBar(title: const Text('Cadastro de Medição')), body: SingleChildScrollView(padding: const EdgeInsets.all(16), child: Form(key: _formKey, child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      DropdownButtonFormField<Safra>(initialValue: _safraSelecionada, decoration: const InputDecoration(labelText: 'Safra', border: OutlineInputBorder()), items: _safras.map((item) => DropdownMenuItem(value: item, child: Text(item.nomeSafra))).toList(), onChanged: (valor) => setState(() => _safraSelecionada = valor), validator: (valor) => valor == null ? 'Selecione a safra' : null),
-      const SizedBox(height: 16),
-      DropdownButtonFormField<Equipamento>(initialValue: _equipamentoSelecionado, decoration: const InputDecoration(labelText: 'Equipamento', border: OutlineInputBorder()), items: _equipamentos.map((item) => DropdownMenuItem(value: item, child: Text(item.nome))).toList(), onChanged: (valor) => setState(() => _equipamentoSelecionado = valor), validator: (valor) => valor == null ? 'Selecione o equipamento' : null),
-      const SizedBox(height: 16),
-      DropdownButtonFormField<TipoInformacao>(initialValue: _tipoSelecionado, decoration: const InputDecoration(labelText: 'Tipo de Informação', border: OutlineInputBorder()), items: _tipos.map((item) => DropdownMenuItem(value: item, child: Text(item.nome))).toList(), onChanged: (valor) => setState(() => _tipoSelecionado = valor), validator: (valor) => valor == null ? 'Selecione o tipo de informação' : null),
-      const SizedBox(height: 16),
-      TextFormField(controller: _valorController, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Valor', border: OutlineInputBorder()), validator: (valor) => valor == null || double.tryParse(valor.replaceAll(',', '.')) == null ? 'Informe um valor válido' : null),
-      const SizedBox(height: 16),
-      InkWell(onTap: _selecionarData, child: InputDecorator(decoration: const InputDecoration(labelText: 'Data e Hora', border: OutlineInputBorder()), child: Text(_formatarData(_dataSelecionada)))),
-      if (_dataSelecionada == null) const Padding(padding: EdgeInsets.only(top: 8), child: Text('Informe a data e hora', style: TextStyle(color: Colors.red))),
-      const SizedBox(height: 16),
-      ElevatedButton(onPressed: _salvar, child: const Text('Salvar')),
-      const SizedBox(height: 16),
-      ..._medicoes.asMap().entries.map((entrada) => Card(child: ListTile(title: Text('${entrada.value.tipoInformacao.nome}: ${entrada.value.valor} ${entrada.value.tipoInformacao.unidadeMedida.simbolo}'), subtitle: Text('${entrada.value.safra.nomeSafra} - ${entrada.value.equipamento.nome}\n${_formatarData(entrada.value.data)}'), isThreeLine: true, trailing: IconButton(icon: const Icon(Icons.delete), onPressed: () => _excluir(entrada.key))))),
-    ]))));
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Cadastro de Medição'),
+        actions: [
+          if (_editando)
+            IconButton(
+              onPressed: _limparFormulario,
+              icon: const Icon(Icons.close),
+              tooltip: 'Cancelar edição',
+            ),
+        ],
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DropdownButtonFormField<Safra>(
+                initialValue: _safraSelecionada,
+                decoration: const InputDecoration(
+                  labelText: 'Safra',
+                  border: OutlineInputBorder(),
+                ),
+                items: _safras
+                    .map((item) => DropdownMenuItem(value: item, child: Text(item.nomeSafra)))
+                    .toList(),
+                onChanged: (valor) => setState(() => _safraSelecionada = valor),
+                validator: (valor) => valor == null ? 'Selecione a safra' : null,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<Equipamento>(
+                initialValue: _equipamentoSelecionado,
+                decoration: const InputDecoration(
+                  labelText: 'Equipamento',
+                  border: OutlineInputBorder(),
+                ),
+                items: _equipamentos
+                    .map((item) => DropdownMenuItem(value: item, child: Text(item.nome)))
+                    .toList(),
+                onChanged: (valor) => setState(() => _equipamentoSelecionado = valor),
+                validator: (valor) => valor == null ? 'Selecione o equipamento' : null,
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<TipoInformacao>(
+                initialValue: _tipoSelecionado,
+                decoration: const InputDecoration(
+                  labelText: 'Tipo de Informação',
+                  border: OutlineInputBorder(),
+                ),
+                items: _tipos
+                    .map((item) => DropdownMenuItem(value: item, child: Text(item.nome)))
+                    .toList(),
+                onChanged: (valor) => setState(() => _tipoSelecionado = valor),
+                validator: (valor) => valor == null ? 'Selecione o tipo de informação' : null,
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
+                controller: _valorController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Valor',
+                  border: OutlineInputBorder(),
+                ),
+                validator: (valor) =>
+                    valor == null || double.tryParse(valor.replaceAll(',', '.')) == null
+                        ? 'Informe um valor válido'
+                        : null,
+              ),
+              const SizedBox(height: 16),
+              InkWell(
+                onTap: _selecionarData,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Data e Hora',
+                    border: OutlineInputBorder(),
+                  ),
+                  child: Text(_formatarData(_dataSelecionada)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _salvar,
+                child: Text(_editando ? 'Atualizar' : 'Salvar'),
+              ),
+              const SizedBox(height: 16),
+              if (_carregando)
+                const Center(child: CircularProgressIndicator())
+              else if (_erro != null)
+                Text(_erro!, style: const TextStyle(color: Colors.red))
+              else if (_medicoes.isEmpty)
+                const Center(child: Text('Nenhuma medição cadastrada.'))
+              else
+                ..._medicoes.map(
+                  (medicao) => Card(
+                    child: ListTile(
+                      title: Text(
+                        '${medicao.tipoInformacao.nome}: ${medicao.valor} ${medicao.tipoInformacao.unidadeMedida.simbolo}',
+                      ),
+                      subtitle: Text(
+                        '${medicao.safra.nomeSafra} - ${medicao.equipamento.nome}\n${_formatarData(medicao.data)}',
+                      ),
+                      isThreeLine: true,
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.edit),
+                            onPressed: () => _editar(medicao),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () => _excluir(medicao),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
